@@ -63,13 +63,13 @@ export default function Contact() {
               </span>
             </a>
 
-            <a href="mailto:ajinkya.mudliaar@gmail.com">
+            <a href="mailto:tesseract.solutions17@gmail.com">
               <div className="contact-option-icon">
                 <Mail size={16} />
               </div>
               <span>
                 <small>EMAIL</small>
-                ajinkya.mudliaar@gmail.com
+                tesseract.solutions17@gmail.com
               </span>
             </a>
 
