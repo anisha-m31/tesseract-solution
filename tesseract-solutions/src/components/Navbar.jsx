@@ -17,10 +17,6 @@ export default function Navbar() {
           Services
         </a>
 
-        <a href="#about" onClick={closeMenu}>
-          About
-        </a>
-
         <a href="#contact" onClick={closeMenu}>
           Contact
         </a>
