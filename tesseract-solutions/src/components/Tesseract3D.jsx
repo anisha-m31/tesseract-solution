@@ -1,12 +1,9 @@
 import { Canvas, useFrame } from "@react-three/fiber";
-import { useRef, useMemo } from "react";
+import { useRef, useMemo, useCallback } from "react";
 import * as THREE from "three";
 
 /* ═══════════════════════════════════════════════════════════
-   DIMENSIONS
-   ─ OUTER  : half-size of the outer cube
-   ─ INNER  : half-size of the inner cube  (~44% of outer)
-   ─ BEAM_W : cross-section of each structural beam
+   DIMENSIONS  — unchanged
    ═══════════════════════════════════════════════════════════ */
 const OUTER  = 1.58;
 const INNER  = 0.70;
@@ -34,8 +31,7 @@ const CUBE_EDGES = [
 ];
 
 /* ═══════════════════════════════════════════════════════════
-   Beam — a thin rectangular rod between two Vector3 points.
-   Uses BoxGeometry so it renders as a solid structural member.
+   Beam — unchanged geometry
    ═══════════════════════════════════════════════════════════ */
 const UP = new THREE.Vector3(0, 1, 0);
 
@@ -56,8 +52,7 @@ function Beam({ a, b, mat }) {
 }
 
 /* ═══════════════════════════════════════════════════════════
-   Joint sphere — small sphere at each vertex junction for
-   the characteristic "bolted-joint" look of the logo.
+   Joint sphere — unchanged geometry
    ═══════════════════════════════════════════════════════════ */
 function Joint({ pos, mat }) {
   return (
@@ -68,59 +63,120 @@ function Joint({ pos, mat }) {
 }
 
 /* ═══════════════════════════════════════════════════════════
-   Full Tesseract (4D hypercube) model
-   ─ 12 outer cube beams
-   ─ 12 inner cube beams
-   ─  8 connecting rods (outer corner → matching inner corner)
-   ─ 16 joint spheres
-   Total visible structural members: 32 beams + 16 joints
+   TesseractModel
+   ─ All geometry and materials are 100% unchanged.
+   ─ Only the useFrame animation logic has been upgraded to
+     support drag interaction via the shared `ctrl` ref.
+
+   ctrl ref shape:
+     { dragging, dx, dy, lastX, lastY }
    ═══════════════════════════════════════════════════════════ */
-function TesseractModel() {
+function TesseractModel({ ctrl }) {
   const group = useRef();
 
   const outerV = useMemo(() => makeVerts(OUTER), []);
   const innerV = useMemo(() => makeVerts(INNER), []);
 
-  /* Outer cube material — dark gunmetal with silver highlights */
+  /* ── Materials — completely unchanged ── */
   const matOuter = useMemo(() => new THREE.MeshStandardMaterial({
     color:     new THREE.Color("#1a3550"),
     metalness: 0.92,
     roughness: 0.18,
   }), []);
 
-  /* Inner cube material — slightly lighter steel blue */
   const matInner = useMemo(() => new THREE.MeshStandardMaterial({
     color:     new THREE.Color("#1f3f60"),
     metalness: 0.90,
     roughness: 0.22,
   }), []);
 
-  /* Connecting rods — midtone between outer and inner */
   const matConn = useMemo(() => new THREE.MeshStandardMaterial({
     color:     new THREE.Color("#182d45"),
     metalness: 0.91,
     roughness: 0.20,
   }), []);
 
-  /* Joint material */
   const matJoint = useMemo(() => new THREE.MeshStandardMaterial({
     color:     new THREE.Color("#2a4f72"),
     metalness: 0.95,
     roughness: 0.12,
   }), []);
 
-  useFrame(({ clock }) => {
-    const t = clock.getElapsedTime();
-    // Slow Y-axis rotation — matches original animation
-    group.current.rotation.y = t * 0.18;
-    // Gentle X wobble for depth feel
-    group.current.rotation.x = Math.sin(t * 0.38) * 0.07;
-    // Subtle float
-    group.current.position.y = Math.sin(t * 0.5) * 0.06;
+  /* ── Rotation state (mutable refs, no re-renders) ── */
+  const rotY    = useRef(0.45);   // current Y angle
+  const rotX    = useRef(0.28);   // current X angle
+  const velY    = useRef(0);      // inertia Y
+  const velX    = useRef(0);      // inertia X
+  const autoOn  = useRef(true);   // auto-rotating?
+  const autoAcc = useRef(0);      // accumulated time for auto float/wave
+  const idleAt  = useRef(null);   // timestamp when drag ended
+
+  /* ── Unified animation + interaction loop ── */
+  useFrame((_, delta) => {
+    if (!group.current) return;
+    const c = ctrl.current;
+
+    if (c.dragging) {
+      /* ─ User is dragging: follow pointer exactly ─ */
+      const sens = 0.007;
+      rotY.current += c.dx * sens;
+      rotX.current += c.dy * sens;
+      rotX.current  = THREE.MathUtils.clamp(rotX.current, -Math.PI / 2.1, Math.PI / 2.1);
+
+      // Capture velocity snapshot for inertia on release
+      velY.current = c.dx * sens;
+      velX.current = c.dy * sens;
+
+      // Consume delta so we don't double-count next frame
+      c.dx = 0;
+      c.dy = 0;
+
+      autoOn.current = false;
+      idleAt.current = null;
+
+    } else {
+      /* ─ Not dragging: apply inertia then (optionally) auto-rotate ─ */
+
+      // Inertia — exponential decay
+      velY.current *= 0.88;
+      velX.current *= 0.88;
+      rotY.current += velY.current;
+      rotX.current += velX.current;
+      rotX.current  = THREE.MathUtils.clamp(rotX.current, -Math.PI / 2.1, Math.PI / 2.1);
+
+      // Begin idle timer the first frame after drag ends
+      if (!autoOn.current && idleAt.current === null) {
+        idleAt.current = performance.now();
+      }
+
+      // Resume auto-rotation after 1.8 s of inactivity
+      if (!autoOn.current && idleAt.current !== null &&
+          performance.now() - idleAt.current > 1800) {
+        autoOn.current = true;
+        idleAt.current = null;
+      }
+
+      if (autoOn.current) {
+        autoAcc.current += delta;
+
+        // Same Y-axis speed as original (0.18 rad/s)
+        rotY.current += 0.18 * delta;
+
+        // Gently ease X back toward the original slow sine wave
+        const targetX = Math.sin(autoAcc.current * 0.38) * 0.07;
+        rotX.current += (targetX - rotX.current) * 0.018;
+
+        // Subtle vertical float (unchanged from original)
+        group.current.position.y = Math.sin(autoAcc.current * 0.5) * 0.06;
+      }
+    }
+
+    group.current.rotation.y = rotY.current;
+    group.current.rotation.x = rotX.current;
   });
 
   return (
-    <group ref={group} rotation={[0.28, 0.45, 0]}>
+    <group ref={group}>
 
       {/* ── Outer cube: 12 beams ── */}
       {CUBE_EDGES.map(([i, j], k) => (
@@ -152,49 +208,90 @@ function TesseractModel() {
 }
 
 /* ═══════════════════════════════════════════════════════════
-   Canvas with carefully tuned lighting to reproduce the
-   dark gunmetal + silver highlight + deep-blue look of
-   the original logo.
+   Tesseract3D — exported component
+   ─ Wraps Canvas in a div that captures Pointer Events
+     (works for mouse AND touch via the unified Pointer API).
+   ─ `touchAction: "none"` prevents the browser scrolling
+     the page while the user drags the logo on mobile.
+   ─ `setPointerCapture` keeps the drag active even if the
+     pointer leaves the element mid-drag.
+   ─ All lighting is identical to the previous version.
    ═══════════════════════════════════════════════════════════ */
 export default function Tesseract3D() {
+  /* Shared mutable state — avoids React re-renders on every frame */
+  const ctrl = useRef({ dragging: false, dx: 0, dy: 0, lastX: 0, lastY: 0 });
+
+  const onPointerDown = useCallback((e) => {
+    // Capture the pointer so drag continues outside the element
+    e.currentTarget.setPointerCapture(e.pointerId);
+    ctrl.current.dragging = true;
+    ctrl.current.lastX    = e.clientX;
+    ctrl.current.lastY    = e.clientY;
+    ctrl.current.dx       = 0;
+    ctrl.current.dy       = 0;
+  }, []);
+
+  const onPointerMove = useCallback((e) => {
+    if (!ctrl.current.dragging) return;
+    // Accumulate delta — consumed each frame in useFrame
+    ctrl.current.dx   += e.clientX - ctrl.current.lastX;
+    ctrl.current.dy   += e.clientY - ctrl.current.lastY;
+    ctrl.current.lastX = e.clientX;
+    ctrl.current.lastY = e.clientY;
+  }, []);
+
+  const onPointerUp = useCallback(() => {
+    ctrl.current.dragging = false;
+  }, []);
+
   return (
-    <Canvas
-      camera={{ position: [0, 0, 7.2], fov: 42 }}
-      dpr={[1, 2]}
+    <div
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
+      style={{
+        width:       "100%",
+        height:      "100%",
+        cursor:      "grab",
+        touchAction: "none", // prevent page scroll on mobile while dragging
+        userSelect:  "none",
+      }}
     >
-      {/* Low ambient — keep it dark like the logo */}
-      <ambientLight intensity={0.22} color="#b0c8e0" />
+      <Canvas
+        camera={{ position: [0, 0, 7.2], fov: 42 }}
+        dpr={[1, 2]}
+      >
+        {/* ── Lighting — completely unchanged ── */}
+        <ambientLight intensity={0.22} color="#b0c8e0" />
 
-      {/* Main key light — upper-left front, warm-cool silver */}
-      <directionalLight
-        position={[-4, 6, 5]}
-        intensity={2.8}
-        color="#cce0f5"
-      />
+        <directionalLight
+          position={[-4, 6, 5]}
+          intensity={2.8}
+          color="#cce0f5"
+        />
 
-      {/* Right-side fill for the silver edge highlight */}
-      <directionalLight
-        position={[6, 1, 2]}
-        intensity={1.4}
-        color="#d8eaf8"
-      />
+        <directionalLight
+          position={[6, 1, 2]}
+          intensity={1.4}
+          color="#d8eaf8"
+        />
 
-      {/* Subtle back-rim light — deep blue glow */}
-      <directionalLight
-        position={[0, -3, -6]}
-        intensity={0.7}
-        color="#1a4060"
-      />
+        <directionalLight
+          position={[0, -3, -6]}
+          intensity={0.7}
+          color="#1a4060"
+        />
 
-      {/* Point light for the bright highlight on the right face */}
-      <pointLight
-        position={[4, 2, 4]}
-        intensity={1.2}
-        color="#e8f4ff"
-        distance={12}
-      />
+        <pointLight
+          position={[4, 2, 4]}
+          intensity={1.2}
+          color="#e8f4ff"
+          distance={12}
+        />
 
-      <TesseractModel />
-    </Canvas>
+        <TesseractModel ctrl={ctrl} />
+      </Canvas>
+    </div>
   );
 }
